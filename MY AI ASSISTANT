@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUJI'S FRIEND</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #e0f2fe;
+        }
+        .message-container {
+            max-height: 70vh;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+    <div class="bg-white rounded-3xl shadow-2xl p-6 md:p-8 max-w-2xl w-full flex flex-col space-y-6">
+        <div class="flex items-center justify-between">
+            <h1 class="text-3xl font-bold text-gray-800">SUJI'S FRIEND</h1>
+        </div>
+        
+        <!-- Message display area -->
+        <div id="messages" class="message-container overflow-y-auto space-y-4 pr-2">
+            <!-- Messages will be injected here by JavaScript -->
+            <div class="flex justify-start">
+                <div class="bg-blue-100 rounded-3xl rounded-bl-none p-4 shadow-md max-w-[80%]">
+                    <p class="text-gray-800">Hello! I am your AI assistant. How can I help you today?</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input area -->
+        <div class="relative flex items-center mt-4">
+            <textarea id="user-input"
+                      class="flex-1 p-4 pr-12 rounded-3xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none transition-all duration-200 shadow-sm"
+                      placeholder="Type your message here..."
+                      rows="1"></textarea>
+            <button id="send-button"
+                    class="absolute right-2 p-2 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-all duration-300 transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                </svg>
+            </button>
+        </div>
+
+        <!-- Status message and audio player -->
+        <div id="status-message" class="text-center text-gray-500 font-medium hidden">
+            <span id="loading-spinner" class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-r-transparent"></span>
+            <span class="ml-2">Thinking...</span>
+        </div>
+        <audio id="audio-player" class="hidden"></audio>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const userInput = document.getElementById('user-input');
+            const sendButton = document.getElementById('send-button');
+            const messagesContainer = document.getElementById('messages');
+            const statusMessage = document.getElementById('status-message');
+            const audioPlayer = document.getElementById('audio-player');
+
+            // API configuration
+            const apiKey = "";
+            const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const ttsApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+            
+            // System instruction for the AI assistant
+            const systemInstruction = "You are a witty, friendly, and poetic AI assistant. For every user query, your response must be a witty rhyming couplet.";
+
+            // Helper function to append messages to the chat
+            const addMessage = (text, isUser) => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+                messageDiv.innerHTML = `
+                    <div class="bg-${isUser ? 'blue-600 text-white rounded-3xl rounded-br-none' : 'gray-100 text-gray-800 rounded-3xl rounded-bl-none'} p-4 shadow-md max-w-[80%]">
+                        <p>${text}</p>
+                    </div>
+                `;
+                messagesContainer.appendChild(messageDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            };
+
+            // Helper function to convert base64 PCM to WAV
+            const base64ToArrayBuffer = (base64) => {
+                const binaryString = window.atob(base64);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                return bytes.buffer;
+            };
+
+            const pcmToWav = (pcmData, sampleRate) => {
+                const numChannels = 1;
+                const bitsPerSample = 16;
+                const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+                const blockAlign = numChannels * bitsPerSample / 8;
+                const dataSize = pcmData.byteLength;
+
+                const buffer = new ArrayBuffer(44 + dataSize);
+                const view = new DataView(buffer);
+                let offset = 0;
+
+                // RIFF chunk
+                view.setUint32(offset, 0x52494646, false); // "RIFF"
+                offset += 4;
+                view.setUint32(offset, 36 + dataSize, true); // File size
+                offset += 4;
+                view.setUint32(offset, 0x57415645, false); // "WAVE"
+                offset += 4;
+
+                // fmt chunk
+                view.setUint32(offset, 0x666d7420, false); // "fmt "
+                offset += 4;
+                view.setUint32(offset, 16, true); // Subchunk size
+                offset += 4;
+                view.setUint16(offset, 1, true); // Audio format (1 for PCM)
+                offset += 2;
+                view.setUint16(offset, numChannels, true);
+                offset += 2;
+                view.setUint32(offset, sampleRate, true);
+                offset += 4;
+                view.setUint32(offset, byteRate, true);
+                offset += 4;
+                view.setUint16(offset, blockAlign, true);
+                offset += 2;
+                view.setUint16(offset, bitsPerSample, true);
+                offset += 2;
+
+                // data chunk
+                view.setUint32(offset, 0x64617461, false); // "data"
+                offset += 4;
+                view.setUint32(offset, dataSize, true);
+                offset += 4;
+
+                const pcmArray = new Uint8Array(pcmData);
+                for (let i = 0; i < pcmArray.length; i++) {
+                    view.setUint8(offset + i, pcmArray[i]);
+                }
+
+                return new Blob([view], { type: 'audio/wav' });
+            };
+
+            const generateTextAndSpeech = async (prompt) => {
+                let textResponse = '';
+                try {
+                    // Step 1: Generate text response with system instructions and search grounding
+                    const textPayload = {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        systemInstruction: { parts: [{ text: systemInstruction }] },
+                        tools: [{ "google_search": {} }]
+                    };
+                    const textResponseRaw = await fetch(textApiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(textPayload)
+                    });
+                    const textResult = await textResponseRaw.json();
+                    textResponse = textResult?.candidates?.[0]?.content?.parts?.[0]?.text || "Sorry, I couldn't generate a text response.";
+                    addMessage(textResponse, false);
+
+                    // Step 2: Generate speech from the text response
+                    const ttsPayload = {
+                        contents: [{ parts: [{ text: textResponse }] }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: {
+                                voiceConfig: {
+                                    prebuiltVoiceConfig: { voiceName: "Kore" }
+                                }
+                            }
+                        },
+                        model: "gemini-2.5-flash-preview-tts"
+                    };
+                    const ttsResponseRaw = await fetch(ttsApiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(ttsPayload)
+                    });
+                    const ttsResult = await ttsResponseRaw.json();
+                    const part = ttsResult?.candidates?.[0]?.content?.parts?.[0];
+                    const audioData = part?.inlineData?.data;
+                    const mimeType = part?.inlineData?.mimeType;
+
+                    if (audioData && mimeType) {
+                        const sampleRate = parseInt(mimeType.match(/rate=(\d+)/)[1], 10);
+                        const pcmData = base64ToArrayBuffer(audioData);
+                        const wavBlob = pcmToWav(pcmData, sampleRate);
+                        const audioUrl = URL.createObjectURL(wavBlob);
+                        audioPlayer.src = audioUrl;
+                        audioPlayer.play();
+                    } else {
+                        console.error("No audio data received.");
+                    }
+                } catch (error) {
+                    console.error("Error during API calls:", error);
+                    addMessage("I am sorry, I am unable to respond at the moment. Please try again later.", false);
+                } finally {
+                    sendButton.disabled = false;
+                    statusMessage.classList.add('hidden');
+                }
+            };
+
+            const handleSend = () => {
+                const text = userInput.value.trim();
+                if (text === '') return;
+
+                addMessage(text, true);
+                userInput.value = '';
+                userInput.style.height = 'auto';
+                
+                sendButton.disabled = true;
+                statusMessage.classList.remove('hidden');
+
+                generateTextAndSpeech(text);
+            };
+
+            // Event listeners
+            sendButton.addEventListener('click', handleSend);
+            userInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                }
+            });
+            userInput.addEventListener('input', () => {
+                userInput.style.height = 'auto';
+                userInput.style.height = userInput.scrollHeight + 'px';
+            });
+        });
+    </script>
+</body>
+</html>
